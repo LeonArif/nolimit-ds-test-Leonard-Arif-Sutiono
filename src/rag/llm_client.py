@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Sequence
-import json
-import os
-import re
-import socket
-import urllib.error
-import urllib.request
+
+from google import genai
+from google.genai import types
 
 from .vector_store import SearchResult
 
@@ -16,7 +14,9 @@ SYSTEM_PROMPT = (
     "You are a precise document assistant. Answer ONLY using the provided context from the uploaded PDF documents. "
     "If the answer cannot be found in the context, respond exactly with: "
     '"Informasi ini tidak ditemukan dalam dokumen yang tersedia." ' 
-    "Do not use external knowledge. Always cite the file name and page number in the answer."
+    "Do not use external knowledge. If the user asks about anything unrelated to the provided context, "
+    "respond exactly with: \"Informasi ini tidak ditemukan dalam dokumen yang tersedia.\" "
+    "Always cite the file name and page number in the answer when you do answer from the context."
 )
 
 
@@ -29,10 +29,10 @@ def build_prompt(query: str, retrieved_chunks: Sequence[SearchResult]) -> str:
 
     context = "\n\n".join(context_parts) if context_parts else "(no context available)"
     return (
-        f"System:\n{SYSTEM_PROMPT}\n\n"
         f"Context:\n{context}\n\n"
         f"Question:\n{query}\n\n"
-        "Answer in a concise, factual way. Include source citations using file name and page number."
+        "Answer only from the context above. If the answer is not in the context, return the exact Indonesian fallback sentence. "
+        "Keep the answer concise and factual, and include file name and page number citations when relevant."
     )
 
 
@@ -44,30 +44,30 @@ def _clean_generated_text(text: str) -> str:
 
 
 @dataclass
-class HFInferenceClient:
+class GeminiClient:
     model_id: str
-    token: str
-    timeout: int = 120
+    api_key: str
+    max_output_tokens: int = 512
 
     def generate_answer(self, query: str, retrieved_chunks: Sequence[SearchResult]) -> str:
-        if not self.token:
-            raise RuntimeError("HF_TOKEN is missing. Set it in .env or Streamlit secrets.")
+        if not self.api_key:
+            raise RuntimeError("GEMINI_API_KEY is missing. Set it in .env or Streamlit secrets.")
 
         if not retrieved_chunks:
             return 'Informasi ini tidak ditemukan dalam dokumen yang tersedia.'
 
         prompt = build_prompt(query, retrieved_chunks)
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 512,
-                "temperature": 0.2,
-                "top_p": 0.95,
-                "return_full_text": False,
-            },
-            "options": {"wait_for_model": True},
-        }
-        response = self._post(payload)
+        client = genai.Client(api_key=self.api_key)
+        response = client.models.generate_content(
+            model=self.model_id,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                max_output_tokens=self.max_output_tokens,
+                temperature=0.0,
+                top_p=1.0,
+            ),
+        )
         generated_text = self._extract_generated_text(response)
 
         if not generated_text:
@@ -75,49 +75,20 @@ class HFInferenceClient:
 
         return _clean_generated_text(generated_text)
 
-    def _post(self, payload: dict) -> object:
-        url = f"https://api-inference.huggingface.co/models/{self.model_id}"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            body = error.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"Hugging Face Inference API error ({error.code}): {body}") from error
-        except urllib.error.URLError as error:
-            reason = getattr(error, "reason", None)
-            if isinstance(reason, socket.gaierror):
-                raise RuntimeError(
-                    "Could not resolve the Hugging Face API host. This is a local DNS/network problem, "
-                    "not a model-id problem. Check internet access, proxy, VPN, or firewall settings."
-                ) from error
-
-            raise RuntimeError(
-                "Could not reach Hugging Face Inference API. Check internet access, proxy, VPN, or firewall settings."
-            ) from error
-
     @staticmethod
     def _extract_generated_text(response: object) -> str:
-        if isinstance(response, list) and response:
-            first_item = response[0]
-            if isinstance(first_item, dict):
-                return str(first_item.get("generated_text", ""))
+        text = getattr(response, "text", "")
+        if text:
+            return str(text)
 
-        if isinstance(response, dict):
-            if "error" in response:
-                raise RuntimeError(str(response["error"]))
-            if "generated_text" in response:
-                return str(response["generated_text"])
-            if "summary_text" in response:
-                return str(response["summary_text"])
+        candidates = getattr(response, "candidates", None)
+        if isinstance(candidates, list) and candidates:
+            first_candidate = candidates[0]
+            content = getattr(first_candidate, "content", None)
+            if content is not None:
+                parts = getattr(content, "parts", None)
+                if isinstance(parts, list):
+                    texts = [str(getattr(part, "text", "")) for part in parts if getattr(part, "text", "")]
+                    return "".join(texts)
 
         return ""
