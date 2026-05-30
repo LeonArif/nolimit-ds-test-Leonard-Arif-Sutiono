@@ -2,6 +2,8 @@
 
 RAG chatbot for the NoLimit Indonesia data scientist test. The app loads PDF documents, extracts and chunks the text, embeds the chunks with `sentence-transformers/all-MiniLM-L6-v2`, retrieves the most relevant passages with cosine similarity or FAISS, and answers with `GeminiClient` through the `google-genai` SDK.
 
+Live demo: https://nolimit-ragchatbot.streamlit.app/
+
 ## Project Structure
 
 - `src/app.py` - Streamlit entry point that handles upload, indexing, retrieval, and chat responses
@@ -15,7 +17,7 @@ RAG chatbot for the NoLimit Indonesia data scientist test. The app loads PDF doc
 
 ## Dataset Source
 
-Source: the included sample document is an author-provided CV PDF stored in the repository for local verification.
+Source: the included sample document is the author's CV included for local verification and demonstration. File path: `data/sample/CV_Leonard Arif Sutiono.pdf`.
 
 License: author-owned sample content used only for this technical test submission.
 
@@ -38,7 +40,7 @@ pip install -r requirements.txt
 5. Start the app:
 
 ```bash
-streamlit run src/app.py
+python -m streamlit run src/app.py
 ```
 
 ## How It Works
@@ -49,6 +51,21 @@ streamlit run src/app.py
 4. A query retrieves the top relevant chunks.
 5. The Gemini model answers using only the retrieved context and cites file/page sources.
 6. If the API key is missing or generation fails, the app falls back to a retrieval-only summary.
+
+## Usage (quick)
+
+- Live demo: https://nolimit-ragchatbot.streamlit.app/
+- Run locally from the project root:
+
+```bash
+python -m streamlit run src/app.py
+```
+
+- On the app page: upload one or more PDF files (or use the included sample CV), enter a question in the input box, and press Send.
+- The assistant will answer using only the retrieved document context and will list cited sources (file name + page number) under the assistant message.
+- If the answer is not present in the documents, the app returns the exact fallback message:
+
+`Informasi ini tidak ditemukan dalam dokumen yang tersedia.`
 
 ## Output Rules
 
